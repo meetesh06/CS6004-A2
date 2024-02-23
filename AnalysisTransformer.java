@@ -3,29 +3,88 @@ import java.util.*;
 import soot.*;
 import soot.jimple.InvokeExpr;
 import soot.jimple.ParameterRef;
+import soot.jimple.StaticFieldRef;
+import soot.jimple.ThisRef;
 import soot.jimple.internal.JAssignStmt;
+import soot.jimple.internal.JGotoStmt;
 import soot.jimple.internal.JIdentityStmt;
+import soot.jimple.internal.JIfStmt;
 import soot.jimple.internal.JInstanceFieldRef;
 import soot.jimple.internal.JInvokeStmt;
+import soot.jimple.internal.JLengthExpr;
 import soot.jimple.internal.JNewExpr;
 import soot.jimple.internal.JReturnStmt;
 import soot.jimple.internal.JReturnVoidStmt;
 import soot.jimple.internal.JSpecialInvokeExpr;
 import soot.jimple.internal.JimpleLocal;
+import soot.toolkits.graph.ClassicCompleteUnitGraph;
+import soot.toolkits.graph.UnitGraph;
 
 import java.io.*;
 
-class PointsToGraph<G> {
+interface Cloneable {
+    public Cloneable clone();
+}
 
-    public HashMap<String, G> properties;
+class PointsToGraph {
 
     private HashMap<String, HashMap<String, Set<String>>> heap; // Heap mapping
     private HashMap<String, Set<String>> stack; // Stack mapping
 
+    public PointsToGraph clone() {
+        PointsToGraph clone = new PointsToGraph();
+        for (String heapObj : heap.keySet()) {
+            clone.heap.put(heapObj, new HashMap<>());
+            for(String field : heap.get(heapObj).keySet()) {
+                clone.heap.get(heapObj).put(field, new HashSet<>());
+                clone.heap.get(heapObj).get(field).addAll(heap.get(heapObj).get(field));
+            }
+        }
+        for (String stackVar : stack.keySet()) {
+            clone.stack.put(stackVar, new HashSet<>());
+            clone.stack.get(stackVar).addAll(stack.get(stackVar));
+        }
+        return clone;
+    }
+
+    public boolean equals(PointsToGraph other) {
+        if (!stack.keySet().equals(other.stack.keySet())) return false;
+        if (!heap.keySet().equals(other.heap.keySet())) return false;
+        
+        // Compare stack
+        for (String stackVar : stack.keySet()) {
+            if (!stack.get(stackVar).equals(other.stack.get(stackVar))) return false;
+        }
+
+        // Compare heap
+        for (String heapObj : heap.keySet()) {
+            HashMap<String, Set<String>> fieldMap1 = heap.get(heapObj);
+            HashMap<String, Set<String>> fieldMap2 = other.heap.get(heapObj);
+            if (!fieldMap1.keySet().equals(fieldMap2.keySet())) return false;
+            for (String field : fieldMap1.keySet()) {
+                if (!fieldMap1.get(field).equals(fieldMap2.get(field))) return false;
+            }
+        }
+        return true;
+    }
+    public void add(PointsToGraph other) {
+        for (String heapObj : other.heap.keySet()) {
+            if (!heap.containsKey(heapObj)) heap.put(heapObj, new HashMap<>());
+            for(String field : other.heap.get(heapObj).keySet()) {
+                if (!heap.get(heapObj).containsKey(field)) heap.get(heapObj).put(field, new HashSet<>());
+                heap.get(heapObj).get(field).addAll(other.heap.get(heapObj).get(field));
+            }
+        }
+        for (String stackVar : other.stack.keySet()) {
+            if (!stack.containsKey(stackVar)) stack.put(stackVar, new HashSet<>());
+            stack.get(stackVar).addAll(other.stack.get(stackVar));
+        }
+
+    }
+
     public PointsToGraph() {
         heap = new HashMap<>();
         stack = new HashMap<>();
-        properties = new HashMap<>();
     }
 
     // a = new A(); Simple New
@@ -152,121 +211,172 @@ class NodeProp {
     int escapeStatus = 0;
 }
 
+class PointsToAnalysis {
+    PatchingChain<Unit> units;
+    UnitGraph uGraph;
+    String methodName;
+
+    PointsToAnalysis(Body body, String methodName) {
+        this.uGraph = new ClassicCompleteUnitGraph(body);
+        this.units = body.getUnits();
+        this.methodName = methodName;
+    }
+
+    private void flowFunction(Unit u, PointsToGraph ptg) {
+        if (u instanceof JAssignStmt) {
+            JAssignStmt stmnt = (JAssignStmt) u;
+            // a = new A()
+            if (stmnt.leftBox.getValue() instanceof JimpleLocal && stmnt.rightBox.getValue() instanceof JNewExpr) {
+                JimpleLocal stackVal = (JimpleLocal) stmnt.leftBox.getValue();
+                String heapObjName = "O" + u.getJavaSourceStartLineNumber();
+                ptg.handleSimpleNewStatement(stackVal.getName(), heapObjName);
+            }
+            // a.f = b
+            else if (stmnt.leftBox.getValue() instanceof JInstanceFieldRef
+                    && stmnt.rightBox.getValue() instanceof JimpleLocal) {
+                JInstanceFieldRef fieldref = (JInstanceFieldRef) stmnt.leftBox.getValue();
+                JimpleLocal stackVal = (JimpleLocal) stmnt.rightBox.getValue();
+                ptg.handleStoreStatement(fieldref.getBase().toString(), fieldref.getField().getName(),
+                        stackVal.getName());
+            }
+            // a = b.f
+            else if (stmnt.leftBox.getValue() instanceof JimpleLocal
+                    && stmnt.rightBox.getValue() instanceof JInstanceFieldRef) {
+                JimpleLocal stackVal = (JimpleLocal) stmnt.leftBox.getValue();
+                JInstanceFieldRef fieldref = (JInstanceFieldRef) stmnt.rightBox.getValue();
+                ptg.handleLoadStatement(stackVal.getName(), fieldref.getBase().toString(),
+                        fieldref.getField().getName());
+            }
+            // a = b
+            else if (stmnt.leftBox.getValue() instanceof JimpleLocal
+                    && stmnt.rightBox.getValue() instanceof JimpleLocal) {
+                JimpleLocal stackVal1 = (JimpleLocal) stmnt.leftBox.getValue();
+                JimpleLocal stackVal2 = (JimpleLocal) stmnt.rightBox.getValue();
+                ptg.handleCopyStatement(stackVal1.getName(), stackVal2.getName());
+            }
+            // global = a
+            else if (stmnt.leftBox.getValue() instanceof StaticFieldRef
+                    && stmnt.rightBox.getValue() instanceof JimpleLocal) {
+                StaticFieldRef staticFieldref = (StaticFieldRef) stmnt.leftBox.getValue();
+                JimpleLocal stackVal = (JimpleLocal) stmnt.rightBox.getValue();
+
+                ptg.handleCopyStatement(staticFieldref.getField().getName(), stackVal.getName());
+            }
+            // a = global
+            else if (stmnt.leftBox.getValue() instanceof JimpleLocal
+                    && stmnt.rightBox.getValue() instanceof StaticFieldRef) {
+                JimpleLocal stackVal = (JimpleLocal) stmnt.leftBox.getValue();
+                StaticFieldRef staticFieldref = (StaticFieldRef) stmnt.rightBox.getValue();
+
+                ptg.handleCopyStatement(stackVal.getName(), staticFieldref.getField().getName());
+            } 
+            // a = lengthof b
+            else if (stmnt.leftBox.getValue() instanceof JimpleLocal
+                    && stmnt.rightBox.getValue() instanceof JLengthExpr) {
+                        // Ignore
+            }
+            else {
+                System.err.println("  UKNASSN--" + u);
+
+                System.err.println("    Left: " + stmnt.leftBox.getValue().getClass() + ", Right: "
+                        + stmnt.rightBox.getValue().getClass());
+            }
+        } else if (u instanceof JInvokeStmt) {
+            // Ignore all invoke statements
+        } else if (u instanceof JReturnStmt) {
+            // Ignore all return statements
+        } else if (u instanceof JReturnVoidStmt) {
+            // Ignore return void statement
+        } else if (u instanceof JIdentityStmt) {
+            JIdentityStmt iden = (JIdentityStmt) u;
+            if (iden.leftBox.getValue() instanceof JimpleLocal
+                    && iden.rightBox.getValue() instanceof ParameterRef) {
+                JimpleLocal stackVal = (JimpleLocal) iden.leftBox.getValue();
+                ParameterRef paramref = (ParameterRef) iden.rightBox.getValue();
+                String heapObjName = "\"@param" + paramref.getIndex() + "\"";
+                ptg.handleSimpleNewStatement(stackVal.getName(), heapObjName);
+            }
+            // a = @thisptr
+            else if (iden.leftBox.getValue() instanceof JimpleLocal
+                    && iden.rightBox.getValue() instanceof ThisRef) {
+                JimpleLocal stackVal = (JimpleLocal) iden.leftBox.getValue();
+                ptg.handleSimpleNewStatement(stackVal.getName(), "\"@this\"");
+            }
+
+            else {
+                System.err.println("  UKN--" + u);
+                System.err.println("    Left: " + iden.leftBox.getValue().getClass() + ", Right: "
+                        + iden.rightBox.getValue().getClass());
+            }
+        } else if (u instanceof JIfStmt || u instanceof JGotoStmt) {
+            // Ignore all conditionals and jumps
+        }
+        else {
+            System.err.println("UNHANDLED: " + u + " (" + u.getClass() + ")");
+        }
+    }
+
+    public void doAnalysis() {
+        Set<Unit> worklist = new HashSet<>();
+        HashMap<Unit, PointsToGraph> outSets = new HashMap<>();
+        // Initialize worklist, add all the nodes so that each node is visited atleast once
+
+        for (Unit u : units) {
+            worklist.add(u);
+            outSets.put(u, new PointsToGraph());
+        }
+
+        while (!worklist.isEmpty()) {
+            // Pop one unit from the worklist
+            Unit currUnit = worklist.iterator().next();
+            worklist.remove(currUnit);
+
+            // 
+            PointsToGraph currentFlowSet = new PointsToGraph(); 
+            // Check incoming edges
+            for(Unit incoming : uGraph.getPredsOf(currUnit)) {
+                currentFlowSet.add(outSets.get(incoming));
+            }
+
+            flowFunction(currUnit, currentFlowSet);
+
+            PointsToGraph old = outSets.get(currUnit);
+            // Add successors to worklist
+            if (!old.equals(currentFlowSet)) {
+                outSets.put(currUnit, currentFlowSet);
+                worklist.addAll(uGraph.getSuccsOf(currUnit));
+            }
+
+        }
+
+        int i = 0;
+
+        for (Unit u : units) {
+            try {
+                outSets.get(u).savePTG(methodName + "_" + (i++) + ".DOT");
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+    }
+}
+
 public class AnalysisTransformer extends BodyTransformer {
     @Override
     protected void internalTransform(Body body, String phaseName, Map<String, String> options) {
         // Construct CFG for the current method's body
-        PatchingChain<Unit> units = body.getUnits();
-
         String methodName = body.getMethod().getName();
-        System.out.println("Printing Jimple for \"" + methodName + "\"");
-        // System.out.println(units);
-
-        PointsToGraph<NodeProp> ptg = new PointsToGraph();
-
-        // Iterate over each unit of CFG.
-        for (Unit u : units) {
-
-            if (u instanceof JAssignStmt) {
-                JAssignStmt stmnt = (JAssignStmt) u;
-
-                // a = new A()
-                if (stmnt.leftBox.getValue() instanceof JimpleLocal && stmnt.rightBox.getValue() instanceof JNewExpr) {
-                    JimpleLocal stackVal = (JimpleLocal) stmnt.leftBox.getValue();
-                    // JNewExpr newClassName = (JNewExpr) stmnt.rightBox.getValue();
-                    String heapObjName = "O" + u.getJavaSourceStartLineNumber();
-
-                    System.out.println("  New:" + stackVal.getName() + " -> " + heapObjName);
-                    ptg.handleSimpleNewStatement(stackVal.getName(), heapObjName);
-                }
-                // a.f = b
-                else if (stmnt.leftBox.getValue() instanceof JInstanceFieldRef
-                        && stmnt.rightBox.getValue() instanceof JimpleLocal) {
-                    JInstanceFieldRef fieldref = (JInstanceFieldRef) stmnt.leftBox.getValue();
-                    JimpleLocal stackVal = (JimpleLocal) stmnt.rightBox.getValue();
-
-                    System.out.println("  Store: " + fieldref.getBase().toString() + "." + fieldref.getField().getName()
-                            + "=" + stackVal.getName());
-                    ptg.handleStoreStatement(fieldref.getBase().toString(), fieldref.getField().getName(),
-                            stackVal.getName());
-                }
-
-                // a = b.f
-                else if (stmnt.leftBox.getValue() instanceof JimpleLocal
-                        && stmnt.rightBox.getValue() instanceof JInstanceFieldRef) {
-                    JimpleLocal stackVal = (JimpleLocal) stmnt.leftBox.getValue();
-                    JInstanceFieldRef fieldref = (JInstanceFieldRef) stmnt.rightBox.getValue();
-
-                    System.out.println("  Load: " + stackVal.getName() + " = " + fieldref.getBase().toString() + "."
-                            + fieldref.getField().getName());
-                    ptg.handleLoadStatement(stackVal.getName(), fieldref.getBase().toString(),
-                            fieldref.getField().getName());
-                }
-
-                else {
-                    System.out.println("  UKN" + u);
-
-                    System.out.println("    Left: " + stmnt.leftBox.getValue().getClass() + ", Right: "
-                            + stmnt.rightBox.getValue().getClass());
-                }
-
-            } else if (u instanceof JInvokeStmt) {
-                JInvokeStmt inv = (JInvokeStmt) u;
-                InvokeExpr invokeExpr = inv.getInvokeExpr();
-                if (invokeExpr instanceof JSpecialInvokeExpr) {
-
-                } else {
-                    System.out.println("  INVOKE: " + inv + " (" + inv.getInvokeExpr().getClass() + ")");
-                }
-            } else if (u instanceof JReturnStmt) {
-                System.out.println("  RETURN: " + u + " (" + u.getClass() + ")");
-
-            } else if (u instanceof JReturnVoidStmt) {
-                System.out.println("  RETURNVOID: " + u + " (" + u.getClass() + ")");
-
-            } else if (u instanceof JIdentityStmt) {
-                JIdentityStmt iden = (JIdentityStmt) u;
-
-                if (iden.leftBox.getValue() instanceof JimpleLocal && iden.rightBox.getValue() instanceof ParameterRef) {
-                    JimpleLocal stackVal = (JimpleLocal) iden.leftBox.getValue();
-                    ParameterRef paramref = (ParameterRef) iden.rightBox.getValue();
-                    String heapObjName = "P" + paramref.getIndex();
-
-                    System.out.println("  Param: " + stackVal.getName() + " -> " + heapObjName);
-                    ptg.handleSimpleNewStatement(stackVal.getName(), heapObjName);
-                } else {
-                    System.out.println("  UKN" + u);
-                    System.out.println("    Left: " + iden.leftBox.getValue().getClass() + ", Right: "
-                            + iden.rightBox.getValue().getClass());
-                }
-
-            }
-
-            else {
-                System.out.println("UNHANDLED: " + u + " (" + u.getClass() + ")");
-            }
-
-            // if (u instanceof JAssignStmt) {
-            // JAssignStmt stmt = (JAssignStmt) u;
-            // Value rhs = stmt.getRightOp();
-            // if (rhs instanceof JNewExpr) {
-            // try {
-            // System.out.println("Unit is " + u + " and the line number is : " +
-            // u.getJavaSourceStartLineNumber());
-            // } catch (Exception e) {
-            // System.out.println("Unit is " + u + " and the line number is : " + -1);
-            // }
-            // }
-            // }
-        }
-        System.out.println("-----------------------------------------------");
-
+        PointsToAnalysis pta = new PointsToAnalysis(body, methodName);
+        System.out.println("Working on method " + methodName);
+        pta.doAnalysis();
         try {
-            ptg.savePTG(methodName + ".DOT");
+            BufferedWriter writer = new BufferedWriter(new FileWriter(methodName + ".jimple"));
+            writer.write(body.toString());
+            writer.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
-
 
     }
 }
