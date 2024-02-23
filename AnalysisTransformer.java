@@ -21,12 +21,126 @@ import soot.toolkits.graph.ClassicCompleteUnitGraph;
 import soot.toolkits.graph.UnitGraph;
 
 import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
-interface Cloneable {
-    public Cloneable clone();
+interface DOTable {
+    public void savePTGToPath(String path) throws IOException;
 }
 
-class PointsToGraph {
+class PointRecorder {
+    PatchingChain<Unit> units;
+    String path;
+    List<String> recorded;
+    int count = 0;
+
+    public PointRecorder(String path, PatchingChain<Unit> units) throws Exception {
+        this.units = units;
+        this.path = path;
+        this.recorded = new ArrayList<>();
+
+        Files.createDirectories(Paths.get(path));
+        Path dirPath = Paths.get(path);
+        if (!Files.exists(dirPath)) {
+            Files.createDirectory(dirPath);
+        }
+    }
+
+    public void save() throws Exception {
+        String htmlPath = path + "/index.html";
+        BufferedWriter writer = new BufferedWriter(new FileWriter(htmlPath));
+        // Add html header
+        writer.write("<!doctype html>\n<html lang=\"en\">\n");
+        writer.write("<head>\n");
+
+
+        writer.write("<meta charset=\"utf-8\">");
+        writer.write("<title>Recorder session navigator</title>");
+
+        writer.write("</head>\n");
+
+        writer.write("<body>\n");
+
+        // <iframe src="demo_iframe.htm" name="iframe_a" height="300px" width="100%" title="Iframe Example"></iframe>
+        // <p><a href="" target="iframe_a"></a></p>
+
+        writer.write("<iframe name=\"iframe_a\" height=\"600px\" width=\"100%\" title=\"State\"></iframe>");
+
+        writer.write("<p>");
+        for (int i = 1; i <= count; i++) {
+            String statePrefix = "stateAt_" + i;
+            String htmlPathForState = path + "/" + statePrefix + ".html";
+            writer.write("<a href=\"" + htmlPathForState + "\" target=\"iframe_a\">" + i + "</a> ||| ");
+        }
+        writer.write("</p>");
+
+
+        writer.write("</body>");
+
+        writer.close();
+    }
+
+    public void recordState(Unit unitToHighlight, DOTable dotable) throws Exception {
+        count++;
+        String statePrefix = "stateAt_" + count;
+        String htmlPath = path + "/" + statePrefix + ".html";
+        String pngPath = path + "/" + "stateAt_" + count + ".DOT" + ".png";
+        String dotPath = path + "/" + "stateAt_" + count + ".DOT";
+
+        BufferedWriter writer = new BufferedWriter(new FileWriter(htmlPath));
+
+        // Add html header
+        writer.write("<!doctype html>\n<html lang=\"en\">\n");
+        writer.write("<head>\n");
+
+
+        writer.write("<meta charset=\"utf-8\">");
+        writer.write("<title>" + statePrefix + "</title>");
+
+        writer.write("</head>\n");
+
+        writer.write("<body>\n");
+
+        writer.write("<h1> " + statePrefix + " </h1>\n");
+        
+        this.recorded.add(htmlPath);
+        
+        dotable.savePTGToPath(dotPath);
+
+        Process dotProcess = Runtime.getRuntime().exec("dot -Tpng " + dotPath + " -O"); 
+        int exitCode1 = dotProcess.waitFor(); 
+
+        
+        writer.write(" <div class=\"mainContainer\">\n");
+
+        writer.write("   <div class=\"codeContainer\">\n");
+        // At a given time stamp, generate a page with unit highlighted and record the event.
+        for (Unit u : units) {
+            if (u == unitToHighlight) {
+                writer.write("      <div class=\"jimpleinstruction selectedInstruction\" style=\"font-weight: bold;\">" + u + "</div>\n");
+            } else {
+                writer.write("      <div class=\"jimpleinstruction\" >" + u + "</div>\n");
+            }
+        }
+        writer.write("   </div>\n"); // code container end
+
+        // Add link to image
+        writer.write("   <div class=\"imageContainer\">\n");
+        // <img src="img_girl.jpg" alt="Girl in a jacket"> 
+        writer.write("      <img src=\"" + pngPath + "\" alt=\"PTG " + statePrefix +  "\">");
+
+        writer.write("   </div>\n"); // image container end
+
+        writer.write(" </div>\n"); // main container end
+
+        writer.write("</body>\n");
+        writer.close();
+        
+    }
+}
+
+class PointsToGraph implements DOTable {
 
     private HashMap<String, HashMap<String, Set<String>>> heap; // Heap mapping
     private HashMap<String, Set<String>> stack; // Stack mapping
@@ -156,12 +270,8 @@ class PointsToGraph {
         }
     }
 
-    public void savePTG(String path) throws IOException {
-        if (path == null) {
-            // TODO
-            return;
-        }
 
+    public void savePTGToPath(String path) throws IOException {
         String rankDir = "LR";
         String fieldEdgeWeight = "0.2";
 
@@ -316,14 +426,35 @@ class PointsToAnalysis {
         }
     }
 
-    public void doAnalysis() {
+    public void doAnalysis() throws Exception {
+        PointRecorder recorder = new PointRecorder(System.getProperty("user.dir") + "/recording/"+methodName, units);
+
         Set<Unit> worklist = new HashSet<>();
         HashMap<Unit, PointsToGraph> outSets = new HashMap<>();
         // Initialize worklist, add all the nodes so that each node is visited atleast once
 
         for (Unit u : units) {
-            worklist.add(u);
+            
             outSets.put(u, new PointsToGraph());
+        }
+
+        for (Unit currUnit : units) {
+            PointsToGraph currentFlowSet = new PointsToGraph(); 
+            // Check incoming edges
+            for(Unit incoming : uGraph.getPredsOf(currUnit)) {
+                currentFlowSet.add(outSets.get(incoming));
+            }
+
+            recorder.recordState(currUnit, currentFlowSet);
+            flowFunction(currUnit, currentFlowSet);
+            recorder.recordState(currUnit, currentFlowSet);
+            
+            PointsToGraph old = outSets.get(currUnit);
+            // Add successors to worklist
+            if (!old.equals(currentFlowSet)) {
+                outSets.put(currUnit, currentFlowSet);
+                worklist.addAll(uGraph.getSuccsOf(currUnit));
+            }
         }
 
         while (!worklist.isEmpty()) {
@@ -338,7 +469,10 @@ class PointsToAnalysis {
                 currentFlowSet.add(outSets.get(incoming));
             }
 
+            recorder.recordState(currUnit, currentFlowSet);
             flowFunction(currUnit, currentFlowSet);
+            recorder.recordState(currUnit, currentFlowSet);
+            
 
             PointsToGraph old = outSets.get(currUnit);
             // Add successors to worklist
@@ -349,15 +483,17 @@ class PointsToAnalysis {
 
         }
 
-        int i = 0;
+        recorder.save();
 
-        for (Unit u : units) {
-            try {
-                outSets.get(u).savePTG(methodName + "_" + (i++) + ".DOT");
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
+        // int i = 0;
+
+        // for (Unit u : units) {
+        //     try {
+        //         outSets.get(u).savePTGToPath(methodName + "_" + (i++) + ".DOT");
+        //     } catch (IOException e) {
+        //         e.printStackTrace();
+        //     }
+        // }
 
     }
 }
@@ -369,12 +505,12 @@ public class AnalysisTransformer extends BodyTransformer {
         String methodName = body.getMethod().getName();
         PointsToAnalysis pta = new PointsToAnalysis(body, methodName);
         System.out.println("Working on method " + methodName);
-        pta.doAnalysis();
         try {
+            pta.doAnalysis();
             BufferedWriter writer = new BufferedWriter(new FileWriter(methodName + ".jimple"));
             writer.write(body.toString());
             writer.close();
-        } catch (IOException e) {
+        } catch (Exception e) {
             e.printStackTrace();
         }
 
