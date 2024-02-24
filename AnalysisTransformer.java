@@ -55,28 +55,32 @@ class PointRecorder {
         writer.write("<head>\n");
 
 
-        writer.write("<meta charset=\"utf-8\">");
-        writer.write("<title>Recorder session navigator</title>");
+        writer.write("  <meta charset=\"utf-8\">");
+        writer.write("  <title>Recorder session navigator</title>");
+
+        writer.write("  <script>");
+
+        writer.write("    function updateSlider(slideAmount) {\n");
+        writer.write("      console.log(\"updateSlider called\");");
+        writer.write("      var sliderDiv = document.getElementById(\"sliderAmount\");\n");
+        writer.write("      document.getElementById('AppFrame').setAttribute(\"src\",`" + path + "/" + "stateAt_${slideAmount}.html" + "`);\n");
+
+        writer.write("      sliderDiv.innerHTML = slideAmount;\n");
+        writer.write("    }\n");
+
+        writer.write("  </script>");
 
         writer.write("</head>\n");
 
         writer.write("<body>\n");
 
-        // <iframe src="demo_iframe.htm" name="iframe_a" height="300px" width="100%" title="Iframe Example"></iframe>
-        // <p><a href="" target="iframe_a"></a></p>
 
-        writer.write("<iframe name=\"iframe_a\" height=\"600px\" width=\"100%\" title=\"State\"></iframe>");
-
-        writer.write("<p>");
-        for (int i = 1; i <= count; i++) {
-            String statePrefix = "stateAt_" + i;
-            String htmlPathForState = path + "/" + statePrefix + ".html";
-            writer.write("<a href=\"" + htmlPathForState + "\" target=\"iframe_a\">" + i + "</a> ||| ");
-        }
-        writer.write("</p>");
+        writer.write("  <iframe id=\"AppFrame\" name=\"iframe_a\" height=\"600px\" width=\"100%\" title=\"State\"></iframe>\n");
+        writer.write("  <input width=\"\" id=\"slide\" type=\"range\" min=\"1\" max=\"" + count +  "\" step=\"1\" value=\"1\" onchange=\"updateSlider(this.value)\">\n");
+        writer.write("  <div id=\"sliderAmount\"></div>\n");
 
 
-        writer.write("</body>");
+        writer.write("</body>\n");
 
         writer.close();
     }
@@ -108,8 +112,7 @@ class PointRecorder {
         
         dotable.savePTGToPath(dotPath);
 
-        Process dotProcess = Runtime.getRuntime().exec("dot -Tpng " + dotPath + " -O"); 
-        int exitCode1 = dotProcess.waitFor(); 
+        Runtime.getRuntime().exec("dot -Tpng " + dotPath + " -O"); 
 
         
         writer.write(" <div class=\"mainContainer\">\n");
