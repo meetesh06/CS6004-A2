@@ -131,7 +131,7 @@ class PointRecorder {
         count++;
         String statePrefix = "stateAt_" + count;
         String htmlPath = path + "/" + statePrefix + ".html";
-        String pngPath = path + "/" + "stateAt_" + count + ".DOT" + ".png";
+        String pngPath = "./" + "stateAt_" + count + ".DOT" + ".png";
         String dotPath = path + "/" + "stateAt_" + count + ".DOT";
 
         BufferedWriter writer = new BufferedWriter(new FileWriter(htmlPath));
@@ -958,6 +958,7 @@ class PointsToAnalysis {
 
 public class AnalysisTransformer extends BodyTransformer {
     ArrayList<String> finalResult = new ArrayList<String>();
+    HashMap<String, String> finalMap = new HashMap<String, String>();
 
     String getEscapingObjects(Set<String> old) {
         ArrayList<Integer> escapingObjs = new ArrayList<>();
@@ -990,6 +991,7 @@ public class AnalysisTransformer extends BodyTransformer {
             Set<String> result = new HashSet<>(pta.analysisResult);
             String escapingObjs = getEscapingObjects(result);
             finalResult.add(body.getMethod().getDeclaringClass().getName() + ":" + methodName + " " + escapingObjs);
+            finalMap.put(methodName, escapingObjs);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -1000,6 +1002,24 @@ public class AnalysisTransformer extends BodyTransformer {
         for (String r : finalResult) {
             System.out.println(r);
         }
+
+        try {
+            BufferedWriter writer = new BufferedWriter(new FileWriter(System.getProperty("user.dir") + "/recording/index.html"));
+            // Add html header
+            writer.write("<!doctype html>\n<html lang=\"en\">\n");
+            writer.write("<head>\n");
+            writer.write("<title> Generic recording session </title>\n");
+            writer.write("</head>\n");
+            writer.write("<body>\n");
+            for (String m : finalMap.keySet()) {
+                writer.write("<a href=\"" + m + "/index.html\">" + m.replaceAll("<", "").replaceAll(">", "") + " -- " + finalMap.get(m) + "</a> </br> \n");
+            }
+            writer.write("</body>\n");
+            writer.close();
+        } catch (Exception e) {
+            
+        }
+
     }
 
 }
