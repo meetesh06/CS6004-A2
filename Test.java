@@ -16,8 +16,6 @@ public class Test {
 		Node z = new Node();
 		y.f = z;
 		bar(x.f, y);
-		y = x;
-		global = x;
 		return y.f;
 	}
 	public static void bar(Node p1, Node p2){

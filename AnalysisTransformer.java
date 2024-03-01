@@ -60,7 +60,7 @@ class PointRecorder {
         }
     }
 
-    public void save() throws Exception {
+    public void save(Set<String> finalResult) throws Exception {
         String htmlPath = path + "/index.html";
         BufferedWriter writer = new BufferedWriter(new FileWriter(htmlPath));
         // Add html header
@@ -94,6 +94,7 @@ class PointRecorder {
 
         writer.write("  <p style=\"font-family: monospace; margin-bottom: 15px;\">\n");
         writer.write("  The recorder session recorded <b>" + count + "</b> distinct states.\n");
+        writer.write(getEscapingObjects(finalResult));
         writer.write("  </p>\n");
 
         writer.write("  <input class=\"slider\" autofocus width=\"\" id=\"slide\" type=\"range\" min=\"1\" max=\""
@@ -104,6 +105,26 @@ class PointRecorder {
         writer.write("</body>\n");
 
         writer.close();
+    }
+
+    String getEscapingObjects(Set<String> old) {
+        ArrayList<Integer> escapingObjs = new ArrayList<>();
+
+        old.forEach(s -> {
+            try {
+                if (s.charAt(0) != 'O') return;
+                escapingObjs.add(Integer.parseInt(s.substring(1)));
+            } catch (Exception e) {
+
+            }
+        });
+
+        escapingObjs.sort((a, b) -> a - b);
+        StringBuilder sb = new StringBuilder();
+        for (Integer i : escapingObjs) {
+            sb.append(i + " ");
+        }
+        return sb.toString();
     }
 
     public void recordState(Unit unitToHighlight, DOTable dotable) throws Exception {
@@ -137,6 +158,11 @@ class PointRecorder {
         writer.write("<body>\n");
 
         writer.write("<h1 class=\"methodName\"> " + name + "@" + count + " </h1>\n");
+
+        if (dotable instanceof PointsToGraph) {
+            writer.write("<h5> " + "escaping: " + getEscapingObjects(((PointsToGraph)dotable).objectsToMark) + " </h5>\n");
+    
+        }
 
         this.recorded.add(htmlPath);
 
@@ -387,7 +413,7 @@ class PointsToGraph implements DOTable {
         if (!heap.containsKey(GLOBAL_SYM)) {
             heap.put(GLOBAL_SYM, new HashMap<>());
             objectsToMark.add(GLOBAL_SYM);
-        }
+        }        
 
         if (!heap.get(heapObj).containsKey("*"))
             heap.get(heapObj).put("*", new HashSet<>());
@@ -422,12 +448,16 @@ class PointsToGraph implements DOTable {
             heap.put(GLOBAL_SYM, new HashMap<>());
             objectsToMark.add(GLOBAL_SYM);
         }
+        if (!heap.containsKey(NULL_SYM)) {
+            heap.put(NULL_SYM, new HashMap<>());
+        }
 
         handleVirtualInvoke(virtualInvoke);
 
-        // It may point to some global
+        // It may point to some global or null
         stack.get(stackVar1).clear();
         stack.get(stackVar1).add(GLOBAL_SYM);
+        stack.get(stackVar1).add(NULL_SYM);
 
         String receiverObj = ((JimpleLocal) virtualInvoke.getBase()).getName();
 
@@ -446,6 +476,34 @@ class PointsToGraph implements DOTable {
         assert (stack.containsKey(receiverObj));
 
         makeGlobalLinks(receiverObj);
+    }
+
+    // a = <virtualInvoke>
+    public void handleStaticInvokeAssignmentStatement(String stackVar1, JStaticInvokeExpr staticInvokeExpr) {
+        if (!stack.containsKey(stackVar1))
+            stack.put(stackVar1, new HashSet<>());
+        if (!heap.containsKey(GLOBAL_SYM)) {
+            heap.put(GLOBAL_SYM, new HashMap<>());
+            objectsToMark.add(GLOBAL_SYM);
+        }
+        if (!heap.containsKey(NULL_SYM)) {
+            heap.put(NULL_SYM, new HashMap<>());
+        }
+
+        handleStaticInvoke(staticInvokeExpr);
+
+        // It may point to some global or null
+        stack.get(stackVar1).clear();
+        stack.get(stackVar1).add(GLOBAL_SYM);
+        stack.get(stackVar1).add(NULL_SYM);
+
+        for (int i = 0; i < staticInvokeExpr.getArgCount(); i++) {
+            Value vBox = staticInvokeExpr.getArgBox(i).getValue();
+            if (vBox instanceof JimpleLocal) {
+                handleCopyConservative(stackVar1, ((JimpleLocal) vBox).getName());
+                makeGlobalLinks(((JimpleLocal) vBox).getName());
+            }
+        }
     }
 
     // <virtualInvoke>
@@ -502,7 +560,6 @@ class PointsToGraph implements DOTable {
             } else {
                 if (!heap.containsKey(NULL_SYM)) {
                     heap.put(NULL_SYM, new HashMap<>());
-                    // objectsToMark.add(NULL_SYM);
                 }
                 heap.get(heapObj).put(field, new HashSet<>());
                 heap.get(heapObj).get(field).add(NULL_SYM);
@@ -627,22 +684,17 @@ class PointsToGraph implements DOTable {
     }
 }
 
-class NodeProp {
-    // 0 - unknown
-    // 1 - not-escape
-    // 2 - escapes
-    int escapeStatus = 0;
-}
-
 class PointsToAnalysis {
     PatchingChain<Unit> units;
     UnitGraph uGraph;
     String methodName;
+    Set<String> analysisResult;
 
     PointsToAnalysis(Body body, String methodName) {
         this.uGraph = new ClassicCompleteUnitGraph(body);
         this.units = body.getUnits();
         this.methodName = methodName;
+        analysisResult = new HashSet<>();
     }
 
     private void flowFunction(Unit u, PointsToGraph ptg) {
@@ -771,6 +823,17 @@ class PointsToAnalysis {
                 ptg.handleStoreStatement(fieldref.getBase().toString(), "*",
                         stackVal.getName());
             }
+            // r0.f = 10
+            else if (stmnt.leftBox.getValue() instanceof JInstanceFieldRef
+                    && stmnt.rightBox.getValue() instanceof IntConstant) {
+            }
+            // a = <static invoke>
+            else if (stmnt.leftBox.getValue() instanceof JimpleLocal
+                    && stmnt.rightBox.getValue() instanceof JStaticInvokeExpr) {
+                JimpleLocal stackVal = (JimpleLocal) stmnt.leftBox.getValue();
+                JStaticInvokeExpr staticInvokeExpr = (JStaticInvokeExpr) stmnt.rightBox.getValue();
+                ptg.handleStaticInvokeAssignmentStatement(stackVal.getName(), staticInvokeExpr);
+            }
             
             else {
                 System.err.println("  UKNASSN--" + u);
@@ -849,7 +912,6 @@ class PointsToAnalysis {
                 currentFlowSet.add(outSets.get(incoming));
             }
 
-            // recorder.recordState(currUnit, old); // Record old flow state
             flowFunction(currUnit, currentFlowSet);
             currentFlowSet.computeClosure();
             recorder.recordState(currUnit, currentFlowSet); // Record new flow state
@@ -874,7 +936,6 @@ class PointsToAnalysis {
                 currentFlowSet.add(outSets.get(incoming));
             }
 
-            // recorder.recordState(currUnit, old); // Record old flow state
             flowFunction(currUnit, currentFlowSet);
             currentFlowSet.computeClosure();
             recorder.recordState(currUnit, currentFlowSet); // Record new flow state
@@ -887,36 +948,58 @@ class PointsToAnalysis {
 
         }
 
-        recorder.save();
-
+        
+        for (Unit currUnit : units) {
+            analysisResult.addAll(outSets.get(currUnit).objectsToMark);
+        }
+        recorder.save(analysisResult);
     }
-}
-
-class EscapeAnalysis {
-
-    PointsToAnalysis pta;
-
-    public EscapeAnalysis(PointsToAnalysis pta) {
-        this.pta = pta;
-    }
-
 }
 
 public class AnalysisTransformer extends BodyTransformer {
+    ArrayList<String> finalResult = new ArrayList<String>();
+
+    String getEscapingObjects(Set<String> old) {
+        ArrayList<Integer> escapingObjs = new ArrayList<>();
+
+        old.forEach(s -> {
+            try {
+                if (s.charAt(0) != 'O') return;
+                escapingObjs.add(Integer.parseInt(s.substring(1)));
+            } catch (Exception e) {
+
+            }
+        });
+
+        escapingObjs.sort((a, b) -> a - b);
+        StringBuilder sb = new StringBuilder();
+        for (Integer i : escapingObjs) {
+            sb.append(i + " ");
+        }
+        return sb.toString();
+    }
+
+
     @Override
     protected void internalTransform(Body body, String phaseName, Map<String, String> options) {
         // Construct CFG for the current method's body
         String methodName = body.getMethod().getName();
         PointsToAnalysis pta = new PointsToAnalysis(body, methodName);
-        System.out.println("Working on method " + methodName);
         try {
             pta.doAnalysis();
-            BufferedWriter writer = new BufferedWriter(new FileWriter(methodName + ".jimple"));
-            writer.write(body.toString());
-            writer.close();
+            Set<String> result = new HashSet<>(pta.analysisResult);
+            String escapingObjs = getEscapingObjects(result);
+            finalResult.add(body.getMethod().getDeclaringClass().getName() + ":" + methodName + " " + escapingObjs);
         } catch (Exception e) {
             e.printStackTrace();
         }
-
     }
+
+    void printResult() {
+        Collections.sort(finalResult);
+        for (String r : finalResult) {
+            System.out.println(r);
+        }
+    }
+
 }
