@@ -20,8 +20,5 @@ public class PA2 {
 
         // Call Soot's main method with arguments
         soot.Main.main(sootArgs);
-        
-        analysisTransformer.printResult();
-        
     }
 }
