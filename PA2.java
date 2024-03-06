@@ -19,7 +19,7 @@ public class PA2 {
         // Add transformer to appropriate pack in PackManager; PackManager will run all packs when soot.Main.main is called
         PackManager.v().getPack("jtp").add(new Transform("jtp.dfa", analysisTransformer));
 
-        // Call Soot's main method with arguments
-        soot.Main.main(sootArgs);
+        try { Thread t = new Thread(() -> { soot.Main.main(sootArgs); }); t.start(); t.join(); } catch (Exception e) { }
+        analysisTransformer.printFinalResult();
     }
 }

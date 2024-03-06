@@ -456,6 +456,7 @@ class PointsToAnalysis {
       }
       ptg.makeGlobalLinks(receiverObj);
     }
+    
     // a = new Array[]
     else if (stmnt.leftBox.getValue() instanceof JimpleLocal
         && stmnt.rightBox.getValue() instanceof JNewArrayExpr) {
@@ -463,15 +464,14 @@ class PointsToAnalysis {
       String wrappedStackVal = wrapString(stackVal.getName());
       String heapObjName = "O" + stmnt.getJavaSourceStartLineNumber();
       String arrayStore = "A" + stmnt.getJavaSourceStartLineNumber();
-      ptg.handleArrayNewStatement(wrappedStackVal, heapObjName, arrayStore); 
-      // ptg.handleSimpleNewStatement(wrappedStackVal, heapObjName); 
+      ptg.handleArrayNewStatement(wrappedStackVal, heapObjName, arrayStore);
     }
     
     // [any] = constant
     else if (stmnt.rightBox.getValue() instanceof Constant) {
       /* ignore */
-    } 
-    
+    }
+
     // [any] = a binop b
     else if (stmnt.rightBox.getValue() instanceof BinopExpr) {
       /* ignore */
@@ -743,8 +743,8 @@ class PointsToAnalysis {
 }
 
 public class AnalysisTransformer extends BodyTransformer {
-  ArrayList<String> finalResult = new ArrayList<String>();
   HashMap<String, String> finalMap = new HashMap<String, String>();
+  HashMap<String, String> finalResult = new HashMap<String, String>();
 
   @Override
   protected void internalTransform(Body body, String phaseName, Map<String, String> options) {
@@ -756,10 +756,11 @@ public class AnalysisTransformer extends BodyTransformer {
       pta.doAnalysis();
       Set<String> result = new HashSet<>(pta.analysisResult);
       String resultString = body.getMethod().getDeclaringClass().getName() + ":" + methodName + " "
-      + PointRecorder.getEscapingObjects(result);
+          + PointRecorder.getEscapingObjects(result);
       if (!PointRecorder.getEscapingObjects(result).equals("")) {
-        System.out.println(resultString);
+        // System.out.println(resultString);
         finalMap.put(body.getMethod().getDeclaringClass().getName() + "/" + methodName, resultString);
+        finalResult.put(body.getMethod().getDeclaringClass().getName() + ":" + methodName, resultString);
       }
     } catch (Exception e) {
       e.printStackTrace();
@@ -767,6 +768,15 @@ public class AnalysisTransformer extends BodyTransformer {
 
     if (PointRecorder.ENABLED)
       PointRecorder.generateIndexPage(finalMap);
+  }
+
+  void printFinalResult() {
+    List<String> sortedKeys = new ArrayList<>(); 
+    sortedKeys.addAll(finalResult.keySet());
+    Collections.sort(sortedKeys);
+    for (String k : sortedKeys) {
+      System.out.println(finalResult.get(k));
+    }
   }
 
 }

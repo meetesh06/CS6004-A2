@@ -12,7 +12,7 @@ public class PointRecorder {
   int count = 0;
   String name;
 
-  static final boolean ENABLED = true;
+  static final boolean ENABLED = false;
 
   public static void generateIndexPage(HashMap<String, String> finalMap) {
     try {
