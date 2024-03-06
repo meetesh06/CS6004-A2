@@ -45,7 +45,7 @@ public class Test6 {
 		o6 = (Test6) o6e;
 	}
 
-	public Test6 test6_4(boolean b) { // 49 51
+	public Test6 test6_4(boolean b) { // 51
 		Test6[] t4 = new Test6[10];
 		Test6 a = t4[4];
 		t4[4] = new Test6();
